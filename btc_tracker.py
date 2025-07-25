@@ -20,21 +20,35 @@ if 'last_update' not in st.session_state:
     st.session_state.last_update = None
 
 def get_btc_price():
-    """Fetch current BTC/USD price from Coinbase API"""
+    """Fetch current BTC/USD price and order book data from Coinbase API"""
     try:
-        url = "https://api.exchange.coinbase.com/products/BTC-USD/ticker"
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
+        # Get ticker data (price, bid, ask, volume)
+        ticker_url = "https://api.exchange.coinbase.com/products/BTC-USD/ticker"
+        ticker_response = requests.get(ticker_url, timeout=5)
+        ticker_response.raise_for_status()
+        ticker_data = ticker_response.json()
         
-        data = response.json()
+        # Get order book data for bid/ask sizes
+        book_url = "https://api.exchange.coinbase.com/products/BTC-USD/book?level=1"
+        book_response = requests.get(book_url, timeout=5)
+        book_response.raise_for_status()
+        book_data = book_response.json()
+        
         current_time = datetime.now()
+        
+        # Extract bid and ask data from order book (level 1 gives best bid/ask)
+        best_bid = book_data['bids'][0] if book_data['bids'] else ['0', '0']
+        best_ask = book_data['asks'][0] if book_data['asks'] else ['0', '0']
         
         price_point = {
             'timestamp': current_time,
-            'price': float(data['price']),
-            'bid': float(data['bid']),
-            'ask': float(data['ask']),
-            'volume': float(data['volume'])
+            'trade_price': float(ticker_data['price']),  # Last trade price
+            'trade_size': float(ticker_data['size']),    # Last trade size
+            'bid_price': float(best_bid[0]),             # Best bid price
+            'bid_size': float(best_bid[1]),              # Best bid size
+            'ask_price': float(best_ask[0]),             # Best ask price
+            'ask_size': float(best_ask[1]),              # Best ask size
+            'volume': float(ticker_data['volume'])       # 24h volume
         }
         
         return price_point
@@ -67,12 +81,12 @@ def create_chart():
     
     fig = go.Figure()
     
-    # Add price line
+    # Add trade price line
     fig.add_trace(go.Scatter(
         x=df['timestamp'],
-        y=df['price'],
+        y=df['trade_price'],
         mode='lines+markers',
-        name='BTC Price',
+        name='Trade Price',
         line=dict(color='orange', width=2),
         marker=dict(size=4)
     ))
@@ -80,24 +94,24 @@ def create_chart():
     # Add bid/ask spread
     fig.add_trace(go.Scatter(
         x=df['timestamp'],
-        y=df['bid'],
+        y=df['bid_price'],
         mode='lines',
-        name='Bid',
+        name='Bid Price',
         line=dict(color='green', width=1, dash='dash'),
         opacity=0.6
     ))
     
     fig.add_trace(go.Scatter(
         x=df['timestamp'],
-        y=df['ask'],
+        y=df['ask_price'],
         mode='lines',
-        name='Ask',
+        name='Ask Price',
         line=dict(color='red', width=1, dash='dash'),
         opacity=0.6
     ))
     
     fig.update_layout(
-        title="Real-time BTC/USD Price",
+        title="Real-time BTC/USD Price & Order Book",
         xaxis_title="Time",
         yaxis_title="Price (USD)",
         height=500,
@@ -129,34 +143,66 @@ def display_metrics():
     
     if len(st.session_state.price_data) >= 2:
         previous = st.session_state.price_data[-2]
-        price_change = latest['price'] - previous['price']
-        price_change_pct = (price_change / previous['price']) * 100
+        price_change = latest['trade_price'] - previous['trade_price']
+        price_change_pct = (price_change / previous['trade_price']) * 100
     
+    # First row - Main price metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric(
-            label="Current Price",
-            value=f"${latest['price']:,.2f}",
+            label="Trade Price",
+            value=f"${latest['trade_price']:,.2f}",
             delta=f"${price_change:+.2f}" if price_change != 0 else None
         )
     
     with col2:
         st.metric(
+            label="Trade Size",
+            value=f"{latest['trade_size']:.4f} BTC"
+        )
+    
+    with col3:
+        st.metric(
+            label="24h Volume",
+            value=f"{latest['volume']:,.2f} BTC"
+        )
+    
+    with col4:
+        spread = latest['ask_price'] - latest['bid_price']
+        spread_pct = (spread / latest['trade_price']) * 100
+        st.metric(
+            label="Spread",
+            value=f"${spread:.2f}",
+            delta=f"{spread_pct:.3f}%"
+        )
+    
+    # Second row - Order book data
+    st.markdown("### Order Book")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
             label="Bid Price",
-            value=f"${latest['bid']:,.2f}"
+            value=f"${latest['bid_price']:,.2f}"
+        )
+    
+    with col2:
+        st.metric(
+            label="Bid Size",
+            value=f"{latest['bid_size']:.4f} BTC"
         )
     
     with col3:
         st.metric(
             label="Ask Price",
-            value=f"${latest['ask']:,.2f}"
+            value=f"${latest['ask_price']:,.2f}"
         )
     
     with col4:
         st.metric(
-            label="24h Volume",
-            value=f"{latest['volume']:,.2f} BTC"
+            label="Ask Size",
+            value=f"{latest['ask_size']:.4f} BTC"
         )
 
 # Main app layout
