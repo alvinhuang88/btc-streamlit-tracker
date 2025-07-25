@@ -18,6 +18,44 @@ if 'price_data' not in st.session_state:
     st.session_state.price_data = []
 if 'last_update' not in st.session_state:
     st.session_state.last_update = None
+if 'aws_api_url' not in st.session_state:
+    st.session_state.aws_api_url = ""
+if 'aws_api_enabled' not in st.session_state:
+    st.session_state.aws_api_enabled = False
+
+def send_to_aws_api(price_data):
+    """Send price data to AWS API Gateway"""
+    if not st.session_state.aws_api_enabled or not st.session_state.aws_api_url:
+        return False
+    
+    try:
+        # Format data as requested: [bid price, bid size, ask price, ask size, trade price, trade size]
+        payload = [
+            price_data['bid_price'],
+            price_data['bid_size'],
+            price_data['ask_price'],
+            price_data['ask_size'],
+            price_data['trade_price'],
+            price_data['trade_size']
+        ]
+        
+        # Send POST request to AWS API Gateway
+        response = requests.post(
+            st.session_state.aws_api_url,
+            json=payload,
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        )
+        
+        response.raise_for_status()
+        return True
+        
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error sending to AWS API: {str(e)}")
+        return False
+    except Exception as e:
+        st.error(f"Unexpected error with AWS API: {str(e)}")
+        return False
 
 def get_btc_price():
     """Fetch current BTC/USD price and order book data from Coinbase API"""
@@ -65,12 +103,15 @@ def update_data():
         st.session_state.price_data.append(new_data)
         st.session_state.last_update = datetime.now()
         
+        # Send to AWS API Gateway if enabled
+        aws_success = send_to_aws_api(new_data)
+        
         # Keep only last 100 data points to prevent memory issues
         if len(st.session_state.price_data) > 100:
             st.session_state.price_data = st.session_state.price_data[-100:]
         
-        return True
-    return False
+        return True, aws_success
+    return False, False
 
 def create_chart():
     """Create the real-time price chart"""
@@ -209,15 +250,60 @@ def display_metrics():
 st.title("₿ Real-time BTC/USD Tracker")
 st.markdown("Live Bitcoin price data from Coinbase API")
 
+# AWS API Configuration Section
+st.sidebar.header("🔗 AWS API Gateway Configuration")
+aws_url_input = st.sidebar.text_input(
+    "AWS API Gateway URL:",
+    value=st.session_state.aws_api_url,
+    placeholder="https://your-api-id.execute-api.region.amazonaws.com/stage/endpoint",
+    help="Enter your AWS API Gateway endpoint URL"
+)
+
+aws_enabled = st.sidebar.checkbox(
+    "Enable AWS API calls",
+    value=st.session_state.aws_api_enabled,
+    help="Send data to AWS API Gateway with each update"
+)
+
+# Update session state
+if aws_url_input != st.session_state.aws_api_url:
+    st.session_state.aws_api_url = aws_url_input
+if aws_enabled != st.session_state.aws_api_enabled:
+    st.session_state.aws_api_enabled = aws_enabled
+
+# Show AWS API status
+if st.session_state.aws_api_enabled and st.session_state.aws_api_url:
+    st.sidebar.success("✅ AWS API configured and enabled")
+elif st.session_state.aws_api_enabled and not st.session_state.aws_api_url:
+    st.sidebar.error("❌ AWS API enabled but URL not provided")
+else:
+    st.sidebar.info("ℹ️ AWS API disabled")
+
+# Data format info
+if st.session_state.aws_api_enabled:
+    st.sidebar.markdown("""
+    **Data Format Sent to AWS:**
+    ```json
+    [bid_price, bid_size, ask_price, ask_size, trade_price, trade_size]
+    ```
+    """)
+
 # Control panel
 col1, col2, col3 = st.columns([2, 1, 1])
 
 with col1:
     if st.button("🔄 Start/Update Data", type="primary"):
-        if update_data():
-            st.success("Data updated successfully!")
+        data_success, aws_success = update_data()
+        if data_success:
+            if st.session_state.aws_api_enabled:
+                if aws_success:
+                    st.success("✅ Data updated and sent to AWS API!")
+                else:
+                    st.warning("⚠️ Data updated but AWS API call failed")
+            else:
+                st.success("✅ Data updated successfully!")
         else:
-            st.error("Failed to fetch data")
+            st.error("❌ Failed to fetch data")
 
 with col2:
     auto_refresh = st.checkbox("Auto-refresh", value=False)
@@ -238,9 +324,17 @@ if auto_refresh:
     placeholder = st.empty()
     
     with placeholder.container():
-        if update_data():
+        data_success, aws_success = update_data()
+        if data_success:
             # Display current metrics
             display_metrics()
+            
+            # Show AWS API status if enabled
+            if st.session_state.aws_api_enabled:
+                if aws_success:
+                    st.info("✅ Data sent to AWS API successfully")
+                else:
+                    st.warning("⚠️ AWS API call failed")
             
             # Display chart
             chart = create_chart()
